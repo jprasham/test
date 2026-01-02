@@ -52,10 +52,10 @@ with st.sidebar:
     st.header("Configuration")
     
     # Ticker selection
-    default_tickers = ['SPY', 'GLD', 'SMH', 'COPX', 'TLT', 'FXI', 'UUP']
+    default_tickers = ['SPY', 'SMH', 'COPX', 'TLT', 'FXI', 'UUP']
     tickers = st.multiselect(
         "Select ETFs to analyze",
-        options=['SPY', 'GLD', 'SMH', 'COPX', 'TLT', 'FXI', 'UUP', 'QQQ', 'IWM', 'EEM', 'VNQ', 'DBC'],
+        options=['SPY', 'SMH', 'COPX', 'TLT', 'FXI', 'UUP', 'QQQ', 'IWM', 'EEM', 'VNQ', 'DBC'],
         default=default_tickers,
         help="SPY will be used as the market benchmark"
     )
