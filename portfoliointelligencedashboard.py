@@ -3,22 +3,22 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
+from datetime import datetime
 
-# =========================
-# Page configuration
-# =========================
+# ============================================================================
+# PAGE CONFIGURATION
+# ============================================================================
 st.set_page_config(
     page_title="Portfolio Intelligence Dashboard",
     page_icon="🎯",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="expanded"
 )
 
-# =========================
-# Custom CSS
-# =========================
-st.markdown(
-    """
+# ============================================================================
+# CUSTOM CSS
+# ============================================================================
+st.markdown("""
 <style>
     .main {
         background: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%);
@@ -29,488 +29,506 @@ st.markdown(
         border-radius: 0.5rem;
         border: 2px solid rgba(71, 85, 105, 0.5);
     }
-    .insight-card {
-        padding: 1.25rem;
+    .summary-box {
+        background: linear-gradient(135deg, rgba(59, 130, 246, 0.15), rgba(139, 92, 246, 0.1));
+        border: 2px solid rgba(59, 130, 246, 0.3);
         border-radius: 1rem;
-        border: 2px solid;
-        margin-bottom: 0.9rem;
-        background: rgba(30, 41, 59, 0.25);
-    }
-    .insight-high {
-        border-color: rgba(16, 185, 129, 0.55);
-        background: linear-gradient(135deg, rgba(16, 185, 129, 0.12), rgba(16, 185, 129, 0.04));
-    }
-    .insight-medium {
-        border-color: rgba(245, 158, 11, 0.55);
-        background: linear-gradient(135deg, rgba(245, 158, 11, 0.12), rgba(245, 158, 11, 0.04));
-    }
-    .insight-low {
-        border-color: rgba(148, 163, 184, 0.40);
-        background: linear-gradient(135deg, rgba(148, 163, 184, 0.10), rgba(148, 163, 184, 0.03));
+        padding: 1.5rem;
+        margin-bottom: 2rem;
     }
 </style>
-""",
-    unsafe_allow_html=True,
-)
+""", unsafe_allow_html=True)
 
-# =========================
-# Title
-# =========================
+# ============================================================================
+# HEADER
+# ============================================================================
 st.title("🎯 Portfolio Intelligence Dashboard")
-st.markdown("### Rolling Correlation & Beta Analysis (SPY benchmark)")
+st.markdown(f"**Analysis Date:** {datetime.now().strftime('%B %d, %Y')}")
 
-# =========================
-# Sidebar configuration
-# =========================
+# ============================================================================
+# SIDEBAR CONFIGURATION
+# ============================================================================
 with st.sidebar:
-    st.header("Configuration")
-
-    default_tickers = ["SPY", "GLD", "SMH", "COPX", "TLT", "FXI", "UUP"]
-    options = ["SPY", "GLD", "SMH", "COPX", "TLT", "FXI", "UUP", "QQQ", "IWM", "EEM", "VNQ", "DBC"]
-
+    st.header("⚙️ Configuration")
+    
+    default_tickers = ['SPY', 'GLD', 'SMH', 'COPX', 'TLT', 'FXI', 'UUP', 'USO']
     tickers = st.multiselect(
-        "Select ETFs to analyze",
-        options=options,
+        "Select ETFs",
+        options=['SPY', 'GLD', 'SMH', 'COPX', 'TLT', 'FXI', 'UUP', 'USO', 
+                'QQQ', 'IWM', 'EEM', 'VNQ', 'DBC', 'GDX', 'SLV'],
         default=default_tickers,
-        help="SPY will be used as the market benchmark",
+        help="SPY is required as the market benchmark"
     )
-
-    window = st.slider("Rolling Window (days)", 10, 60, 30)
-    period = st.selectbox("Analysis Period", ["3mo", "6mo", "1y", "2y"], index=1)
-
+    
+    window = st.slider("Rolling Window (days)", 10, 60, 30, 
+                      help="Window for correlation calculation")
+    
+    period = st.selectbox("Analysis Period", ['6mo', '1y', '2y'], index=1,
+                         help="Longer period provides more reliable trend signals")
+    
+    st.markdown("---")
+    
     if st.button("🔄 Refresh Data", use_container_width=True):
         st.cache_data.clear()
+        st.rerun()
+    
+    st.markdown("---")
+    st.caption("**ETF Guide:**")
+    st.caption("SPY = S&P 500")
+    st.caption("GLD = Gold")
+    st.caption("SMH = Semiconductors")
+    st.caption("COPX = Copper")
+    st.caption("TLT = 20Y+ Treasuries")
+    st.caption("FXI = China Large-Cap")
+    st.caption("UUP = US Dollar Index")
+    st.caption("USO = Oil")
 
-# =========================
-# Helpers
-# =========================
-def _extract_adj_close(raw: pd.DataFrame) -> pd.DataFrame:
-    """
-    yfinance can return:
-      - single-level columns (e.g., 'Adj Close' only)
-      - MultiIndex columns with levels like ('Adj Close', 'GLD') or ('GLD','Adj Close')
-    This function extracts an Adj Close DataFrame with columns=tickers.
-    """
-    if raw is None or raw.empty:
-        return pd.DataFrame()
-
-    cols = raw.columns
-    if isinstance(cols, pd.MultiIndex):
-        # Case A: level 0 contains 'Adj Close'
-        if "Adj Close" in cols.get_level_values(0):
-            adj = raw["Adj Close"].copy()
-        # Case B: level 1 contains 'Adj Close'
-        elif "Adj Close" in cols.get_level_values(1):
-            adj = raw.xs("Adj Close", level=1, axis=1).copy()
-        else:
-            return pd.DataFrame()
-
-        # Ensure columns are plain tickers (strings)
-        adj.columns = [str(c) for c in adj.columns]
-        return adj
-
-    # Single index columns
-    # If we downloaded 1 ticker, yfinance might give a Series or DF with OHLCV cols
-    if "Adj Close" in cols:
-        adj = raw[["Adj Close"]].copy()
-        # Not enough info to name the ticker from raw in this branch; handled in fetch_data
-        return adj
-
-    return pd.DataFrame()
-
+# ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
 
 @st.cache_data(ttl=3600)
-def fetch_data(requested_tickers: list[str], period: str) -> tuple[pd.DataFrame, list[str], list[str]]:
-    """
-    Fetch adjusted close prices for requested_tickers.
-    Returns: (adj_close_df, available_tickers, missing_tickers)
-    """
-    requested_tickers = [t.strip().upper() for t in requested_tickers if str(t).strip()]
-    requested_tickers = list(dict.fromkeys(requested_tickers))  # de-dupe, preserve order
-
-    if not requested_tickers:
-        return pd.DataFrame(), [], []
-
+def fetch_data(tickers, period):
+    """Fetch historical price data from Yahoo Finance"""
     try:
-        raw = yf.download(
-            tickers=requested_tickers,
-            period=period,
-            progress=False,
-            group_by="column",
-            auto_adjust=False,
-            threads=True,
-        )
+        data = yf.download(tickers, period=period, progress=False)['Adj Close']
+        if isinstance(data, pd.Series):
+            data = data.to_frame()
+        return data
+    except Exception as e:
+        st.error(f"Error fetching data: {e}")
+        return None
 
-        # Extract Adj Close robustly
-        adj = _extract_adj_close(raw)
-
-        # If we got single-level 'Adj Close' column only (often when 1 ticker),
-        # yfinance returns a DF with one column 'Adj Close'. Rename it to the ticker.
-        if not adj.empty and list(adj.columns) == ["Adj Close"] and len(requested_tickers) == 1:
-            adj = adj.rename(columns={"Adj Close": requested_tickers[0]})
-
-        # Sometimes yfinance returns a Series if only 1 ticker and slicing happened earlier
-        if isinstance(adj, pd.Series):
-            adj = adj.to_frame(name=requested_tickers[0] if requested_tickers else "PRICE")
-
-        # Clean
-        adj = adj.dropna(how="all")
-        if not adj.empty:
-            adj = adj.sort_index()
-
-        available = [t for t in requested_tickers if t in adj.columns]
-        missing = [t for t in requested_tickers if t not in adj.columns]
-
-        # Keep columns in requested order
-        adj = adj[available] if available else pd.DataFrame(index=adj.index)
-
-        return adj, available, missing
-
-    except Exception:
-        # Avoid leaking exception details on Streamlit Cloud logs; show a friendly message
-        return pd.DataFrame(), [], requested_tickers
-
-
-def calculate_correlation(x: np.ndarray, y: np.ndarray) -> float:
+def calculate_correlation(x, y):
+    """Calculate Pearson correlation coefficient"""
     if len(x) < 2 or len(y) < 2:
-        return 0.0
-    return float(np.corrcoef(x, y)[0, 1])
+        return 0
+    return np.corrcoef(x, y)[0, 1]
 
-
-def calculate_beta(asset_returns: np.ndarray, market_returns: np.ndarray) -> float:
+def calculate_beta(asset_returns, market_returns):
+    """Calculate beta (market sensitivity)"""
     if len(asset_returns) < 2 or len(market_returns) < 2:
-        return 0.0
-    cov = np.cov(asset_returns, market_returns)[0, 1]
-    var = np.var(market_returns)
-    return float(cov / var) if var > 0 else 0.0
+        return 0
+    covariance = np.cov(asset_returns, market_returns)[0, 1]
+    variance = np.var(market_returns)
+    return covariance / variance if variance > 0 else 0
 
-
-def calculate_dual_beta(asset_returns: np.ndarray, market_returns: np.ndarray) -> tuple[float, float]:
+def calculate_dual_beta(asset_returns, market_returns):
+    """
+    Calculate up beta (on up days) and down beta (on down days)
+    Asymmetry > 0.2 indicates convex payoff (good hedge quality)
+    """
     up_mask = market_returns > 0
     down_mask = market_returns < 0
-
-    beta_up = calculate_beta(asset_returns[up_mask], market_returns[up_mask]) if up_mask.sum() > 1 else 0.0
-    beta_down = calculate_beta(asset_returns[down_mask], market_returns[down_mask]) if down_mask.sum() > 1 else 0.0
+    
+    beta_up = calculate_beta(
+        asset_returns[up_mask], 
+        market_returns[up_mask]
+    ) if up_mask.sum() > 1 else 0
+    
+    beta_down = calculate_beta(
+        asset_returns[down_mask], 
+        market_returns[down_mask]
+    ) if down_mask.sum() > 1 else 0
+    
     return beta_up, beta_down
 
-
-# =========================
-# Main
-# =========================
-if len(tickers) < 2:
-    st.warning("Please select at least 2 tickers (including SPY).")
-    st.stop()
-
-if "SPY" not in tickers:
-    st.warning("SPY must be included as the market benchmark.")
-    st.stop()
-
-with st.spinner("Fetching data and running analysis..."):
-    data, available_tickers, missing_tickers = fetch_data(tickers, period)
-
-if missing_tickers:
-    st.warning(
-        f"Some tickers returned no data from Yahoo Finance and were skipped: {', '.join(missing_tickers)}"
-    )
-
-if data is None or data.empty:
-    st.error("Failed to fetch usable price data. Try a different period or fewer tickers.")
-    st.stop()
-
-if "SPY" not in data.columns:
-    st.error("SPY data could not be fetched, so the benchmark is unavailable. Please refresh or try again.")
-    st.stop()
-
-# Need at least one non-SPY asset available
-non_spy = [t for t in available_tickers if t != "SPY"]
-if not non_spy:
-    st.error("No non-SPY assets returned data. Please select other tickers.")
-    st.stop()
-
-# Returns
-returns = data.pct_change().dropna()
-if returns.empty or len(returns) < max(3, window):
-    st.error("Not enough return observations for the selected period/window. Try a longer period.")
-    st.stop()
-
-# Rolling correlation vs SPY
-rolling_corr = {
-    t: returns[t].rolling(window=window).corr(returns["SPY"])
-    for t in non_spy
-}
-rolling_corr_df = pd.DataFrame(rolling_corr)
-
-# Recent window
-recent_returns = returns.tail(window)
-
-# Metrics
-metrics = []
-for t in non_spy:
-    x = recent_returns[t].values
-    m = recent_returns["SPY"].values
-
-    corr = calculate_correlation(x, m)
-    beta_up, beta_down = calculate_dual_beta(x, m)
-    asymmetry = beta_up - beta_down
-
-    vol = recent_returns[t].std() * np.sqrt(252) * 100.0
-    cum_return = (1.0 + recent_returns[t]).prod() - 1.0
-
-    # correlation trend vs 60 trading days if available
-    if len(rolling_corr_df) > 60:
-        recent_corr = float(rolling_corr_df[t].iloc[-1])
-        earlier_corr = float(rolling_corr_df[t].iloc[-60])
-        trend = "Falling" if recent_corr < earlier_corr else "Rising"
-    else:
-        trend = "Stable"
-
-    if abs(corr) < 0.3:
-        div_score = "High"
-    elif abs(corr) < 0.7:
-        div_score = "Medium"
-    else:
-        div_score = "Low"
-
-    hedge_quality = "Good" if asymmetry > 0.2 else "Poor"
-
-    metrics.append(
-        {
-            "Ticker": t,
-            "Correlation": corr,
-            "Volatility": vol,
-            "Up Beta": beta_up,
-            "Down Beta": beta_down,
-            "Asymmetry": asymmetry,
-            "Trend": trend,
-            "Diversification": div_score,
-            "Hedge Quality": hedge_quality,
-            "30D Return": cum_return * 100.0,
-            "Up Days": int((recent_returns["SPY"] > 0).sum()),
-            "Down Days": int((recent_returns["SPY"] < 0).sum()),
-        }
-    )
-
-metrics_df = pd.DataFrame(metrics)
-if metrics_df.empty:
-    st.error("No metrics to display (likely due to missing data).")
-    st.stop()
-
-# =========================
-# Insights
-# =========================
-insights = []
-
-good_hedges = metrics_df.loc[metrics_df["Hedge Quality"] == "Good", "Ticker"].tolist()
-if good_hedges:
-    insights.append(
-        {
-            "type": "high",
-            "title": "🛡️ Best Hedges Right Now",
-            "description": f"{', '.join(good_hedges)} show asymmetric protection (participate more in gains than losses).",
-            "action": "Consider 10–20% allocation for downside protection (depending on risk).",
-        }
-    )
-
-for _, row in metrics_df.iterrows():
-    if row["Trend"] == "Falling" and row["Correlation"] < 0:
-        insights.append(
-            {
-                "type": "high",
-                "title": f"📉 {row['Ticker']} Correlation Shifting Negative",
-                "description": f"{row['Ticker']} correlation with SPY is decreasing and is now {row['Correlation']:.2f}.",
-                "action": "Diversification benefit appears to be improving; reassess sizing.",
-            }
-        )
-
-high_div = metrics_df.loc[metrics_df["Diversification"] == "High", "Ticker"].tolist()
-if high_div:
-    insights.append(
-        {
-            "type": "high",
-            "title": "🎯 Strong Diversifiers",
-            "description": f"{', '.join(high_div)} have low correlation (|corr| < 0.3).",
-            "action": "Useful for reducing portfolio volatility via diversification.",
-        }
-    )
-
-high_corr = metrics_df.loc[metrics_df["Correlation"].abs() > 0.8, "Ticker"].tolist()
-if high_corr:
-    insights.append(
-        {
-            "type": "medium",
-            "title": "⚠️ Concentration Warning",
-            "description": f"{', '.join(high_corr)} are highly correlated with SPY (limited diversification).",
-            "action": "Consider lowering exposure or adding lower-correlation alternatives.",
-        }
-    )
-
-top_performer = metrics_df.loc[metrics_df["30D Return"].idxmax()]
-insights.append(
-    {
-        "type": "low",
-        "title": "📈 Top Performer",
-        "description": f"{top_performer['Ticker']} returned {top_performer['30D Return']:.1f}% over the last {window} days.",
-        "action": "Monitor momentum; watch for mean reversion.",
-    }
-)
-
-# Display insights
-st.header("💡 Actionable Market Signals")
-for ins in insights:
-    st.markdown(
-        f"""
-<div class="insight-card insight-{ins['type']}">
-  <h3 style="margin:0 0 0.25rem 0;">{ins['title']}</h3>
-  <p style="margin:0.25rem 0 0.6rem 0;">{ins['description']}</p>
-  <p style="margin:0; font-style: italic; color:#94a3b8;">→ {ins['action']}</p>
-</div>
-""",
-        unsafe_allow_html=True,
-    )
-
-# =========================
-# Asset cards
-# =========================
-st.header("📊 Asset Overview")
-cols = st.columns(min(len(metrics_df), 6))
-for idx, (_, asset) in enumerate(metrics_df.iterrows()):
-    with cols[idx % len(cols)]:
-        c = float(asset["Correlation"])
-        if abs(c) < 0.3:
-            corr_color = "🟢"
-        elif abs(c) < 0.7:
-            corr_color = "🟡"
-        else:
-            corr_color = "🔴"
-
-        st.metric(
-            label=f"{asset['Ticker']} {corr_color}",
-            value=f"{c:.2f}",
-            delta=f"{asset['30D Return']:.1f}%",
-            help=f"Correlation: {c:.2f}\nVolatility: {asset['Volatility']:.1f}%",
-        )
-        st.caption(f"Vol: {asset['Volatility']:.1f}% | {asset['Diversification']} Div")
-
-# =========================
-# Charts
-# =========================
-st.header("📈 Market Analysis")
-
-col1, col2 = st.columns(2)
-
-with col1:
-    st.subheader(f"Rolling {window}-Day Correlation vs SPY")
-    fig_corr = go.Figure()
-    for t in rolling_corr_df.columns:
-        fig_corr.add_trace(
-            go.Scatter(
-                x=rolling_corr_df.index,
-                y=rolling_corr_df[t],
-                mode="lines",
-                name=t,
-                line=dict(width=2.5),
-            )
-        )
-    fig_corr.add_hline(y=0, line_dash="dash", line_color="gray", opacity=0.5)
-    fig_corr.update_layout(
-        template="plotly_dark",
-        height=400,
-        hovermode="x unified",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        xaxis_title="Date",
-        yaxis_title="Correlation",
-        yaxis=dict(range=[-1, 1]),
-    )
-    st.plotly_chart(fig_corr, use_container_width=True)
-
-with col2:
-    st.subheader("Beta Asymmetry")
-    fig_beta = go.Figure()
-    fig_beta.add_trace(go.Bar(name="Up Beta", x=metrics_df["Ticker"], y=metrics_df["Up Beta"]))
-    fig_beta.add_trace(go.Bar(name="Down Beta", x=metrics_df["Ticker"], y=metrics_df["Down Beta"]))
-    fig_beta.update_layout(
-        template="plotly_dark",
-        height=400,
-        barmode="group",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        xaxis_title="Asset",
-        yaxis_title="Beta",
-    )
-    st.plotly_chart(fig_beta, use_container_width=True)
-
-# =========================
-# Metrics table
-# =========================
-st.header("📋 Complete Portfolio Metrics")
-
-display_df = metrics_df.copy()
-display_df["Correlation"] = display_df["Correlation"].map("{:.2f}".format)
-display_df["Volatility"] = display_df["Volatility"].map("{:.1f}%".format)
-display_df["Up Beta"] = display_df["Up Beta"].map("{:.2f}".format)
-display_df["Down Beta"] = display_df["Down Beta"].map("{:.2f}".format)
-display_df["Asymmetry"] = display_df["Asymmetry"].map("{:.2f}".format)
-display_df["30D Return"] = display_df["30D Return"].map("{:.1f}%".format)
-
-display_df["Role"] = display_df.apply(
-    lambda x: "🛡️ Hedge"
-    if x["Hedge Quality"] == "Good"
-    else ("🎯 Diversifier" if x["Diversification"] == "High" else "📈 Growth"),
-    axis=1,
-)
-
-st.dataframe(
-    display_df[
-        ["Ticker", "Correlation", "Volatility", "Up Beta", "Down Beta", "Asymmetry", "Trend", "30D Return", "Role"]
-    ],
-    use_container_width=True,
-    height=400,
-)
-
-# =========================
-# Framework blocks
-# =========================
-st.header("🎯 Portfolio Construction Framework")
-
-c1, c2 = st.columns(2)
-
-with c1:
-    st.success("**✅ Positive Signals**")
-    st.markdown(
-        """
-- **Falling Correlations**: Assets decoupling = better diversification  
-- **Negative Correlations**: True hedge candidates (zig when market zags)  
-- **High Beta Asymmetry (>0.2)**: Convex payoff (wins bigger than losses)  
-- **Stable Low Correlation**: Reliable diversifier  
-"""
-    )
-
-with c2:
-    st.error("**⚠️ Warning Signals**")
-    st.markdown(
-        """
-- **Rising Correlations**: Crowded trades, contagion risk  
-- **High Correlation (>0.8)**: Minimal diversification benefit  
-- **Negative Asymmetry**: Concave payoff (losses bigger than gains)  
-- **Sudden Correlation Spike**: Potential regime change  
-"""
-    )
-
-st.info(
+def calculate_trend_signal(prices):
     """
-**💡 Suggested Allocation Framework:**
-- **Hedges (10–20%)**: Assets with negative down beta or high asymmetry  
-- **Diversifiers (20–30%)**: Low correlation assets (|corr| < 0.3)  
-- **Core/Satellite (50–70%)**: Market exposure balanced with defensive positions  
-"""
-)
+    Calculate trend based on 50 and 200 day moving averages
+    
+    Returns:
+        - "Positive ↑": Price above BOTH 50D and 200D MA
+        - "Negative ↓": Price below BOTH 50D and 200D MA
+        - "No Signal": Mixed condition (between MAs)
+    """
+    if len(prices) < 200:
+        return "No Signal", 0
+    
+    ma_50 = prices.rolling(window=50).mean()
+    ma_200 = prices.rolling(window=200).mean()
+    
+    current_price = prices.iloc[-1]
+    current_ma_50 = ma_50.iloc[-1]
+    current_ma_200 = ma_200.iloc[-1]
+    
+    if current_price > current_ma_50 and current_price > current_ma_200:
+        return "Positive ↑", 1
+    elif current_price < current_ma_50 and current_price < current_ma_200:
+        return "Negative ↓", -1
+    else:
+        return "No Signal", 0
 
-# =========================
-# Footer
-# =========================
-st.markdown("---")
-st.caption(
-    f"📊 Analysis Period: {returns.index[0].strftime('%Y-%m-%d')} to {returns.index[-1].strftime('%Y-%m-%d')} | "
-    f"Rolling Window: {window} days | "
-    f"Tickers (available): {', '.join(['SPY'] + non_spy)} | "
-    f"Data Source: Yahoo Finance"
-)
+# ============================================================================
+# MAIN ANALYSIS
+# ============================================================================
+
+if len(tickers) < 2:
+    st.warning("⚠️ Please select at least 2 tickers (including SPY)")
+elif 'SPY' not in tickers:
+    st.warning("⚠️ SPY is required as the market benchmark")
+else:
+    with st.spinner("📊 Fetching data and running analysis..."):
+        # Fetch data
+        data = fetch_data(tickers, period)
+        
+        if data is not None and not data.empty:
+            # Calculate returns
+            returns = data.pct_change().dropna()
+            
+            # Rolling correlation with SPY
+            rolling_corr = {}
+            for ticker in tickers:
+                if ticker != 'SPY':
+                    rolling_corr[ticker] = returns[ticker].rolling(window=window).corr(returns['SPY'])
+            
+            rolling_corr_df = pd.DataFrame(rolling_corr)
+            recent_returns = returns.tail(window)
+            
+            # ================================================================
+            # CALCULATE METRICS FOR EACH ASSET
+            # ================================================================
+            metrics = []
+            for ticker in tickers:
+                if ticker == 'SPY':
+                    continue
+                
+                # Current correlation with SPY
+                corr = calculate_correlation(
+                    recent_returns[ticker].values, 
+                    recent_returns['SPY'].values
+                )
+                
+                # Up/Down Beta
+                beta_up, beta_down = calculate_dual_beta(
+                    recent_returns[ticker].values,
+                    recent_returns['SPY'].values
+                )
+                
+                asymmetry = beta_up - beta_down
+                
+                # Volatility (annualized)
+                vol = recent_returns[ticker].std() * np.sqrt(252) * 100
+                
+                # 30-day cumulative return
+                cum_return = (1 + recent_returns[ticker]).prod() - 1
+                
+                # Trend signal using 50/200 day MA
+                trend_signal, trend_value = calculate_trend_signal(data[ticker])
+                
+                # Correlation trend (falling = improving diversification)
+                if len(rolling_corr_df) > 60:
+                    recent_corr = rolling_corr_df[ticker].iloc[-1]
+                    earlier_corr = rolling_corr_df[ticker].iloc[-60]
+                    corr_change = recent_corr - earlier_corr
+                    corr_trend = "↓" if corr_change < -0.05 else "↑" if corr_change > 0.05 else "→"
+                else:
+                    corr_trend = "→"
+                    corr_change = 0
+                
+                metrics.append({
+                    'Ticker': ticker,
+                    'Correlation': corr,
+                    'Corr_Change': corr_change,
+                    'Corr_Trend': corr_trend,
+                    'Volatility': vol,
+                    'Up Beta': beta_up,
+                    'Down Beta': beta_down,
+                    'Asymmetry': asymmetry,
+                    '30D Return': cum_return * 100,
+                    'Trend': trend_signal,
+                    'Trend_Value': trend_value
+                })
+            
+            metrics_df = pd.DataFrame(metrics)
+            
+            # Create correlation matrix for all assets
+            corr_matrix = recent_returns[tickers].corr()
+            
+            # ================================================================
+            # GENERATE AI-READY EXECUTIVE SUMMARY
+            # ================================================================
+            
+            # Calculate summary statistics
+            avg_corr = metrics_df['Correlation'].mean()
+            
+            # Assets with positive trend AND low correlation (ideal for allocation)
+            trend_diversifiers = metrics_df[
+                (metrics_df['Trend_Value'] == 1) & 
+                (metrics_df['Correlation'].abs() < 0.5)
+            ]['Ticker'].tolist()
+            
+            # Assets to avoid: high correlation (>0.7) with no hedge benefit
+            avoid_assets = metrics_df[
+                (metrics_df['Correlation'] > 0.7)
+            ]['Ticker'].tolist()
+            
+            # Good hedges: negative correlation + positive asymmetry
+            good_hedges = metrics_df[
+                (metrics_df['Correlation'] < -0.3) & 
+                (metrics_df['Asymmetry'] > 0.15)
+            ].sort_values('Asymmetry', ascending=False)['Ticker'].tolist()
+            
+            # Assets with positive trend but high correlation
+            high_corr_trends = metrics_df[
+                (metrics_df['Trend_Value'] == 1) & 
+                (metrics_df['Correlation'] > 0.7)
+            ]['Ticker'].tolist()
+            
+            # Assets with negative trend
+            negative_trends = metrics_df[
+                (metrics_df['Trend_Value'] == -1)
+            ]['Ticker'].tolist()
+            
+            # ================================================================
+            # DISPLAY EXECUTIVE SUMMARY
+            # ================================================================
+            
+            st.markdown("""
+            <div class="summary-box">
+                <h3 style="margin-bottom: 1rem; color: #60a5fa;">📊 Executive Summary</h3>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            summary_text = f"""
+**Best Opportunities (Trend + Diversification):** {f"**{', '.join(trend_diversifiers)}** show positive technical momentum (above 50D/200D MA) with correlation below 0.5, offering optimal risk-adjusted allocation in a top-down framework." if trend_diversifiers else "No assets currently meet both trend and diversification criteria. Consider hedges or wait for technical setups."}
+
+**Recommended Hedges:** {f"**{', '.join(good_hedges[:3])}** exhibit negative correlation (<-0.3) and convex payoff profiles (asymmetry >0.15), providing effective downside protection. Allocate 10-20% for tail risk hedging." if good_hedges else "Limited hedge candidates available. Consider increasing cash or defensive positioning."}
+
+**Assets to Avoid/Reduce:** {f"**{', '.join(avoid_assets)}** show correlation >0.7 with SPY, offering minimal diversification benefit and concentrated equity beta exposure." if avoid_assets else "No highly correlated assets identified."}{f" Additionally, **{', '.join(high_corr_trends)}** have positive trends but high correlation—suitable only for tactical overweight with tight risk management." if high_corr_trends else ""}{f" **{', '.join(negative_trends)}** in negative trends (below 50D/200D MA)—avoid until technical improvement." if negative_trends else ""}
+
+**Market Regime:** {"Risk-on environment with elevated correlations (avg {avg_corr:.2f}). Focus on hedges and await better diversification entry points." if avg_corr > 0.5 else f"Balanced regime (avg correlation {avg_corr:.2f}) with {len(trend_diversifiers)} assets offering momentum and diversification. Favorable for global asset allocation." if avg_corr > 0.2 else f"Defensive regime (avg correlation {avg_corr:.2f}) with strong hedge candidates. Prioritize capital preservation and convex positions."}
+            """
+            
+            st.markdown(summary_text)
+            
+            # ================================================================
+            # LAYOUT: THREE COLUMNS
+            # ================================================================
+            
+            col1, col2, col3 = st.columns([2, 2, 1])
+            
+            # ================================================================
+            # COLUMN 1: CORRELATION MATRIX HEATMAP
+            # ================================================================
+            
+            with col1:
+                st.subheader("Correlation Matrix")
+                
+                fig_heatmap = go.Figure(data=go.Heatmap(
+                    z=corr_matrix.values,
+                    x=corr_matrix.columns,
+                    y=corr_matrix.index,
+                    colorscale=[
+                        [0, '#10b981'],      # Green for negative correlation
+                        [0.5, '#1e293b'],    # Dark for zero
+                        [1, '#ef4444']       # Red for positive correlation
+                    ],
+                    zmid=0,
+                    text=corr_matrix.values,
+                    texttemplate='%{text:.2f}',
+                    textfont={"size": 10, "color": "white"},
+                    colorbar=dict(
+                        title="Correlation",
+                        tickvals=[-1, -0.5, 0, 0.5, 1],
+                        ticktext=['-1.0', '-0.5', '0.0', '0.5', '1.0']
+                    ),
+                    hovertemplate='%{x} vs %{y}<br>Correlation: %{z:.2f}<extra></extra>'
+                ))
+                
+                fig_heatmap.update_layout(
+                    template="plotly_dark",
+                    height=400,
+                    xaxis_title="",
+                    yaxis_title="",
+                    font=dict(size=10)
+                )
+                
+                st.plotly_chart(fig_heatmap, use_container_width=True)
+                
+                st.markdown("""
+                **Color Guide:** 🟢 Green = Hedge | 🔴 Red = Correlated | ⚫ Dark = Diversifier
+                """)
+            
+            # ================================================================
+            # COLUMN 2: ROLLING CORRELATION TRENDS
+            # ================================================================
+            
+            with col2:
+                st.subheader(f"Rolling {window}D Correlation vs SPY")
+                
+                fig_corr = go.Figure()
+                
+                colors = ['#fbbf24', '#3b82f6', '#ef4444', '#10b981', 
+                         '#a78bfa', '#f472b6', '#fb923c', '#22d3ee']
+                
+                for idx, ticker in enumerate(rolling_corr_df.columns):
+                    fig_corr.add_trace(go.Scatter(
+                        x=rolling_corr_df.index,
+                        y=rolling_corr_df[ticker],
+                        mode='lines',
+                        name=ticker,
+                        line=dict(width=2.5, color=colors[idx % len(colors)])
+                    ))
+                
+                fig_corr.add_hline(y=0, line_dash="dash", line_color="gray", 
+                                  opacity=0.5, line_width=1)
+                fig_corr.add_hline(y=0.8, line_dash="dot", line_color="red", 
+                                  opacity=0.3, annotation_text="High Corr (0.8)", 
+                                  annotation_position="right")
+                fig_corr.add_hline(y=-0.3, line_dash="dot", line_color="green", 
+                                  opacity=0.3, annotation_text="Hedge Zone (-0.3)", 
+                                  annotation_position="right")
+                
+                fig_corr.update_layout(
+                    template="plotly_dark",
+                    height=400,
+                    hovermode='x unified',
+                    legend=dict(
+                        orientation="h", 
+                        yanchor="bottom", 
+                        y=-0.3, 
+                        xanchor="center", 
+                        x=0.5
+                    ),
+                    xaxis_title="",
+                    yaxis_title="Correlation",
+                    yaxis=dict(range=[-1, 1])
+                )
+                
+                st.plotly_chart(fig_corr, use_container_width=True)
+            
+            # ================================================================
+            # COLUMN 3: MARKET REGIME INDICATORS
+            # ================================================================
+            
+            with col3:
+                st.subheader("Market Regime")
+                
+                high_corr_count = (metrics_df['Correlation'].abs() > 0.7).sum()
+                hedge_count = (metrics_df['Correlation'] < -0.3).sum()
+                positive_trend_count = (metrics_df['Trend_Value'] == 1).sum()
+                
+                st.metric("Avg Correlation", f"{avg_corr:.2f}")
+                st.metric("High Corr Assets", f"{high_corr_count}/{len(metrics_df)}")
+                st.metric("Hedge Candidates", f"{hedge_count}")
+                st.metric("Positive Trends", f"{positive_trend_count}/{len(metrics_df)}")
+                
+                # Regime indicator
+                if avg_corr > 0.5:
+                    st.error("⚠️ **Risk-On**\nHigh correlation regime")
+                elif avg_corr < 0.2:
+                    st.success("✅ **Diversified**\nLow correlation regime")
+                else:
+                    st.info("ℹ️ **Mixed**\nModerate correlation")
+            
+            # ================================================================
+            # BETA ASYMMETRY ANALYSIS
+            # ================================================================
+            
+            st.subheader("Beta Asymmetry Analysis")
+            
+            col_beta1, col_beta2 = st.columns([3, 1])
+            
+            with col_beta1:
+                fig_beta = go.Figure()
+                
+                fig_beta.add_trace(go.Bar(
+                    name='Up Beta (Greed)',
+                    x=metrics_df['Ticker'],
+                    y=metrics_df['Up Beta'],
+                    marker_color='rgb(16, 185, 129)',
+                    text=metrics_df['Up Beta'].round(2),
+                    textposition='outside'
+                ))
+                
+                fig_beta.add_trace(go.Bar(
+                    name='Down Beta (Fear)',
+                    x=metrics_df['Ticker'],
+                    y=metrics_df['Down Beta'],
+                    marker_color='rgb(239, 68, 68)',
+                    text=metrics_df['Down Beta'].round(2),
+                    textposition='outside'
+                ))
+                
+                fig_beta.update_layout(
+                    template="plotly_dark",
+                    height=300,
+                    barmode='group',
+                    legend=dict(
+                        orientation="h", 
+                        yanchor="bottom", 
+                        y=1.02, 
+                        xanchor="right", 
+                        x=1
+                    ),
+                    xaxis_title="",
+                    yaxis_title="Beta",
+                    showlegend=True
+                )
+                
+                st.plotly_chart(fig_beta, use_container_width=True)
+            
+            with col_beta2:
+                st.markdown("**Asymmetry Guide:**")
+                st.markdown("**>0.2** = Convex (Good hedge)")
+                st.markdown("**0-0.2** = Neutral")
+                st.markdown("**<0** = Concave (Risk)")
+                
+                good_asymmetry = metrics_df[metrics_df['Asymmetry'] > 0.2]
+                if len(good_asymmetry) > 0:
+                    st.markdown("**Best Asymmetry:**")
+                    for _, row in good_asymmetry.iterrows():
+                        st.markdown(f"✅ **{row['Ticker']}**: {row['Asymmetry']:.2f}")
+                else:
+                    st.markdown("*No assets with asymmetry >0.2*")
+            
+            # ================================================================
+            # DETAILED METRICS TABLE
+            # ================================================================
+            
+            st.subheader("Detailed Metrics")
+            
+            display_df = metrics_df.copy()
+            display_df['Correlation'] = display_df['Correlation'].map('{:.2f}'.format)
+            display_df['Volatility'] = display_df['Volatility'].map('{:.1f}%'.format)
+            display_df['Up Beta'] = display_df['Up Beta'].map('{:.2f}'.format)
+            display_df['Down Beta'] = display_df['Down Beta'].map('{:.2f}'.format)
+            display_df['Asymmetry'] = display_df['Asymmetry'].map('{:.2f}'.format)
+            display_df['30D Return'] = display_df['30D Return'].map('{:.1f}%'.format)
+            
+            # Add status column
+            def get_status(row):
+                corr = float(row['Correlation'])
+                if corr < -0.3:
+                    return "🟢 Hedge"
+                elif abs(corr) < 0.3:
+                    return "🟡 Diversifier"
+                elif corr > 0.7:
+                    return "🔴 Concentrated"
+                else:
+                    return "🔵 Growth"
+            
+            display_df['Status'] = display_df.apply(get_status, axis=1)
+            
+            st.dataframe(
+                display_df[['Ticker', 'Status', 'Correlation', 'Corr_Trend', 'Trend', 
+                           'Volatility', 'Up Beta', 'Down Beta', 'Asymmetry', '30D Return']],
+                use_container_width=True,
+                height=350
+            )
+            
+            # ================================================================
+            # FOOTER
+            # ================================================================
+            
+            st.markdown("---")
+            st.caption(f"""
+            📊 **Analysis Period:** {returns.index[0].strftime('%Y-%m-%d')} to {returns.index[-1].strftime('%Y-%m-%d')} | 
+            **Rolling Window:** {window} days | **Tickers:** {', '.join(tickers)} | 
+            **Trend:** 50D/200D MA | **Source:** Yahoo Finance | **Update:** Hourly cache
+            """)
+            
+        else:
+            st.error("❌ Failed to fetch data. Please check your internet connection and try again.")
+            st.info("💡 Tip: Try selecting fewer tickers or a shorter time period.")
